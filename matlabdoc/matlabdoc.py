@@ -8,6 +8,7 @@ import os
 import sys
 import argparse
 import logging
+import parsley
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -20,15 +21,15 @@ class M2Html(object):
         """Run M2Html
         """
         self.logger = logging.getLogger(type(self).__name__)
-
-        self.parser = argparse.ArgumentParser()
+        self.matlab_parser = self._get_matlab_parser()
+        self.argparser = argparse.ArgumentParser()
 
         def getonoffargs(isOn=False):
             return dict(choices=['on', 'off'],
                         default=isOn,
                         action=OnOffAction)
 
-        add_arg = self.parser.add_argument
+        add_arg = self.argparser.add_argument
         add_arg('--mFiles', default=os.path.curdir)
         add_arg('--htmlDir', default='doc')
         add_arg('--recursive', **getonoffargs())
@@ -51,36 +52,146 @@ class M2Html(object):
         add_arg('--language', choices=['english'], default='english')
         add_arg('--debug', action='store_true')
 
-        self.opts = self.parser.parse_args(args)
+        self.opts = self.argparser.parse_args(args)
         if self.opts.debug:
             self.logger.setLevel(logging.DEBUG)
         self.logger.debug("Parsed options:% s", self.opts)
 
-    def get_mfiles(self, topdir):
-        """Search for correct .m files
+    def join_paths_rel(self, *paths):
+        """Join paths and return the joined path relative to current directory.
+
+        """
+        path = os.path.join(*paths)
+        path = os.path.relpath(path)
+        return path
+
+    def get_mfiles(self):
+        filepaths = []
+        for path in self.opts.mFiles:
+            if os.path.isfile(path):
+                filepaths.append(path)
+            elif os.path.isdir(path):
+                filepaths += self.get_mfiles_from_dir(path)
+            else:
+                raise ValueError('Path %s is neither a file nor a directory!',
+                                 path)
+        # make this a sorted tuple
+        filepaths = tuple(list(set(filepaths)).sort())
+        return filepaths
+
+    def create_doc_dir(self):
+        """Create doc dir if it does not exist
+        """
+        try:
+            os.mkdirs(self.opts.htmlDir)
+            self.logger.info('creating doc directory: %s', self.opts.htmlDir)
+        except OSError:
+            if os.path.isdir(self.opts.htmlDir):
+                self.logger.info('directory %s exists... OK',
+                                 self.opts.htmlDir)
+            else:
+                self.logger.debug('failed to create directory %s... error:',
+                                  self.opts.htmlDir)
+                raise
+
+    def _get_matlab_parser(self):
+        matlab_grammer_str = textwrap.dedent(r"""
+        # whitespace in line
+        sp = (' ' | '\t')*
+
+        # line continuing
+        linecont = sp '...' nl
+        spa = sp linecont*
+        nl = sp <('\r' '\n' | '\r' | '\n')> sp
+        wsa = ws '...'? ws
+
+        # comments
+        comment = ('%' <(~nl anything)*>:commentcontent) -> commentcontent
+        commentblock = ((sp comment:comment nl) -> comment)+:comments -> "\n".join(comments)
+
+        # vars and vectors
+        varvec = <'[' wsa (varname:varname wsa (',' | ';')? wsa)* ']'>
+        varname = <letter (letterOrDigit | '_')*>
+
+        parenexp = '(' (~')' anything)* ')'
+
+        # function definitions
+        fdef = (( <'function' sp (outargs spa '=' spa)? varname:fname spa inargs:inargs>):sig nl) -> [('type', 'function'), ('name', fname), ('signature', sig)]
+        cdef = (( <'classdef' sp varname:cname (inherit |sp -> []):superclasses> ):sig nl)-> [('type','class'), ('name',cname), ('signature',sig), ('superclasses', superclasses)]
+        inherit = (spa '<' spa varname:v1 spa ((('&' spa varname:vother spa)->vother)+|->[]):vothers) -> [v1]+vothers
+
+        f_or_c_def = (fdef | cdef)
+        argvarlist = <'(' wsa (varname wsa ','? wsa)* ')'>:str -> str.translate(None,".()\r\n").split(',')
+        inargs = argvarlist | -> ['']
+        outargs = ((varname:arg -> [arg])| varvec)
+        # outargs in function context
+        foutargs = ((outargs:outargs spa '=' spa) ->outargs) | -> []
+
+        # keys
+        methodkey = 'methods'
+        propertykey = 'properties'
+
+        # code
+        code = (comment? (~f_or_c_def anything))*
+
+        # docstring and cocumentation parsers
+        docobj = f_or_c_def:fcdef ws (commentblock?:docstr -> docstr)-> dict([('doc', docstr)] + fcdef)
+        doclist = code ((docobj:d code) -> d)+:ds -> ds
+        """)
+        matlab_parser = parsley.makeGrammar(matlab_grammer_str)
+        return matlab_parser
+
+    def parse_m_file(self, m_file):
+        """Parse .m file using the matlab parser and return a parsed list
+
+        """
+        return self.matlab_parser(m_file).doclist()
+
+    def get_filemap(self, paths):
+        """Map files to unique directories.
+
+        Constructs a dict where the keys are the directorypaths relative to the
+        documentation root. The dict values are the filenames of the files that
+        are located in the key directory.
+
+        :arg paths: iterable of paths
+
+        """
+        file_dict = dict()
+        dirs_and_files = [os.path.split(ipath) for ipath in paths]
+        # map files to unique dirnames
+        for dirname, filename in dirs_and_files:
+            file_dict[dirname] = filename
+
+    def write_doc_file(self, doc_dict, doc_file_path):
+        """
+
+        :arg doc_dict:
+        :arg doc_file_path:
+        """
+        pass
+
+    def get_mfiles_from_dir(self, topdir):
+        """Search for correct .m files in a directory
         """
         filepaths = []
-        dirpaths = []
         for dirname, dirnames, filenames in os.walk(topdir):
-            # get new dirs
-            new_dirpaths = [os.path.join(dirname, subdirname)
-                            for subdirname in dirnames]
-            dirpaths += new_dirpaths
-
-            # get new files
-            new_filepaths = [os.path.join(dirname, filename)
-                             for filename in filenames
-                             if os.path.splitext(filename)[1] == '.m']
-            filepaths += new_filepaths
+            # add new files
+            filepaths += [self.join_paths_rel(dirname, filename)
+                          for filename in filenames
+                          if os.path.splitext(filename)[1] == '.m']
 
             # Editing the 'dirnames' list will stop os.walk()
             # from recursing into there.
-            ignored_dirs = [idir for idir in self.opts.ignoreDir
-                            if idir in dirnames]
-            for dirname in ignored_dirs:
-                dirnames.remove(dirname)
-            if not self.opts.recursive:
-                break
+            if self.opts.recursive:
+                ignored_dirs = [idir for idir in self.opts.ignoreDir
+                                if idir in dirnames]
+                for dirname in ignored_dirs:
+                    dirnames.remove(dirname)
+            else: # if not recursive do not continue with any directories
+                dirnames = []
+        return filepaths
+
         # self.logger.debug(filepaths)
 
 
