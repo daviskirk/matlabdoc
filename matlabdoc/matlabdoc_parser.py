@@ -79,26 +79,11 @@ def parse_file(filename):
         for match in _call_re.finditer(line):
             try:
                 doc_obj_list[-1]['calls'].add(match.group('name'))
-            except AttributeError, KeyError:
+            except (AttributeError, KeyError):
                 doc_obj_list[-1]['calls'] = set(match.group('name'))
 
     _logger.debug(pprint.pformat(doc_obj_list))
     return tuple(doc_obj_list)
-
-
-def _add_to_docstring(doc_obj_dict, line):
-    """Add another line to the documentation of the passed documentation
-    object if it exists and the line is indeed a continuation of the
-    documentation string.
-
-    :arg doc_obj_dict: Dictionary with information about the current
-    documentation object. Should be an empty dictionary if no current object is
-    being analysed
-    :arg line: line that is being searched for a docstring
-
-    """
-
-    return doc_obj_dict
 
 
 def _find_doc_obj_start(doc_obj_dict, line, iLine):
