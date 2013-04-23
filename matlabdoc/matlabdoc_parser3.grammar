@@ -1,0 +1,50 @@
+# mfile parser
+mfile = snl* commentblock?:rc snl* (doc_obj | anyline)*:ds
+-> [dict(type='root', doc=rc if rc else '')] + [d for d in ds if d]
+
+# doc object combines help comments and definitions
+doc_obj = definition_line:d commentblock?:c -> dict(d, doc=c if c else '')
+
+# definitions
+definition_line = leading_s definition:d trailing_s_or_comment -> d
+definition = classdef | functiondef
+
+# class
+classdef = 'classdef' scs varname:name scs inherit?:supers
+-> dict(type='class', name=name, superclasses=supers if supers else ())
+
+inherit = <'<' scs varname (scs '&' scs varname)*>:s
+-> tuple(s.translate(None, ' \n\r.\t<').split('&'))
+
+# function
+functiondef = 'function' scs outargs?:o scs varname:name scs inargs?:i
+-> dict(type='function', name=name, inargs=i if i else (), outargs=o if o else ())
+
+outargs = ((varname:v1 -> (v1,)) | ('[' scs commma_separated_varlist:v scs ']' -> v)):v scs '=' -> v
+inargs = '(' scs commma_separated_varlist?:vl scs ')' -> vl if vl else ()
+commma_separated_varlist = <varname scs (',' scs varname)*>:s -> tuple(s.translate(None, '\n\r \t.<').split(','))
+
+# function calls
+call = varname:s leading_s '(' -> s
+
+# variables
+varname = <letter letterOrDigit*>
+
+# comments
+comment = '%' <(~nl anything)* nl>:s -> s
+commentblock = ((leading_s comment:c) -> c)+:comments -> ''.join(comments)
+
+# lines
+trailing_s_or_comment = (s | comment)* nl
+anyline = (~nl anything)* nl -> None
+leading_s = s*
+trailing_s = s* nl
+
+# spaces
+scs = sc*
+scnl = s | linecont | nl
+sc = s | linecont
+linecont = '...' s* nl
+snl = s* nl
+s = ' ' | '\t'
+nl = '\n' | '\r' | '\r\n'
