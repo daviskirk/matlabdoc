@@ -1,0 +1,46 @@
+# mfile parser
+mfile = snl* commentblock? snl* (doc_obj?  (!doc_obj codeline)*)*
+
+# doc object combines help comments and definitions
+doc_obj = definition_line commentblock?
+
+# definitions
+definition_line = ss definition trailing_s_or_comment
+definition = classdef / functiondef
+
+# class
+classdef = "classdef" scs varname scs inherit?
+inherit = "<" scs varname (scs "&" scs varname)*
+
+# function
+functiondef = "function" scs outargs? scs varname scs inargs?
+outargs = (varname / ("[" scs commma_separated_varlist scs "]")) scs "="
+inargs = "(" scs commma_separated_varlist? scs ")"
+commma_separated_varlist = varname scs ("," scs varname)*
+
+# code
+codeline = (call / ~".")*  nl
+call = varname scs "("
+
+# variables
+varname = ~"[a-zA-Z]" ~"\w*"
+
+# comments
+comment = "%" ~".*" nl
+commentblock = (ss comment)+
+
+# lines
+trailing = ~".*" nl
+trailing_s_or_comment = (s / comment)* nl
+leading_s = ~"^" ss
+trailing_s = ss nl
+
+# spaces
+scs = sc*
+scnl = s / linecont / nl
+sc = s / linecont
+linecont = "..." ss nl
+snl = ss nl
+ss = s*
+s = ~"[ \t]"
+nl = ~"[\n]"
