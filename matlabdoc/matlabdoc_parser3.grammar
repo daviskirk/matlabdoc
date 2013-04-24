@@ -1,5 +1,5 @@
 # mfile parser
-mfile = snl* commentblock?:rc snl* (doc_obj | anyline)*:ds
+mfile = trailing_s* commentblock?:rc trailing_s* (doc_obj | anyline)*:ds
 -> [dict(type='root', doc=rc if rc else '')] + [d for d in ds if d]
 
 # doc object combines help comments and definitions
@@ -37,14 +37,13 @@ commentblock = ((leading_s comment:c) -> c)+:comments -> ''.join(comments)
 # lines
 trailing_s_or_comment = (s | comment)* nl
 anyline = (~nl anything)* nl -> None
-leading_s = s*
-trailing_s = s* nl
 
 # spaces
 scs = sc*
 scnl = s | linecont | nl
 sc = s | linecont
-linecont = '...' s* nl
-snl = s* nl
+linecont = '...' s* trailing_s
+leading_s = s*
+trailing_s = s* nl
 s = ' ' | '\t'
 nl = '\n' | '\r' | '\r\n'
