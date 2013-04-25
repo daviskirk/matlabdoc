@@ -4,45 +4,103 @@
 Matlab documentation parser using parsimonious
 """
 
-
-import unittest
+import os
 import collections
 from parsimonious.grammar import Grammar
 from parsimonious.nodes import NodeVisitor
 from pprint import pprint
 
-import logging
-logging.basicConfig
 
+class MatlabDocParser(NodeVisitor):
+    """Object for parsing matlab code and extracting documentation from them.
 
-class MatlabNodeVisitor(NodeVisitor):
+    Uses :mod:`parsimonious` as a parsing backend and subclasses
+    :class:`parsimonious.NodeVisitor` for post - processing. The parsimonious
+    grammar is located in the file *matlabdoc_parser2.grammar*.
 
-    visit_trailing_s = visit_leading_s = visit_scs = lambda s, n, c: None
+    For usage, see :func:`MatlabDocParser.parse`
 
-    @staticmethod
-    def flatten(*n):
-        """Flattens iterables
+    """
 
-        :arg *n:
+    _grammar = Grammar(open(os.path.join(os.path.dirname(__file__),
+                                         "matlabdoc_parser2.grammar")).read())
+
+    visit_trailing_s = visit_leading_s = visit_scs = lambda s, n, c: []
+
+    def parse(self, mfile_string, expr_name='mfile'):
+        """Parses a string of matlab code and returns a dictionary with information
+        about the strings matlab documentation. The string is interpreted as a
+        .m file.
+
+        The field 'main' holds the information about the first documentation
+        object in the string (function or class). If neither a function or
+        class were found, it interprets the string as a matlab script.
+
+        The field 'sub' is a list of dicts and holds all subfunctions (or
+        methods) found in the string.
+
+        Documentation objects have 3 different types:
+
+        - class
+        - function
+        - script
+
+        Each object is described by a dictionary with a key 'key_type'. The
+        'key_type' field holds a string (either 'class', 'function' or
+        'script'). All other fields can differ depending on the type of
+        documentation object.
+
+        Here are a list of fields sorted by documenation object type:
+
+        +--------------------+-------------+----------------+--------------+
+        | key_type           | ``'class'`` | ``'function'`` | ``'script'`` |
+        +====================+=============+================+==============+
+        | name               | **x**       | **x**          | -            |
+        +--------------------+-------------+----------------+--------------+
+        | superclasses       | **x**       | -              | -            |
+        +--------------------+-------------+----------------+--------------+
+        | calls              | **x**       | **x**          | **x**        |
+        +--------------------+-------------+----------------+--------------+
+        | doc                | **x**       | **x**          | **x**        |
+        +--------------------+-------------+----------------+--------------+
+        | signature **TODO** | **x**       | **x**          | -            |
+        +--------------------+-------------+----------------+--------------+
+
+        >>> from matlabdoc_parser2 import MatlabDocParser
+        >>> parser = MatlabDocParser()
+        >>> parsed = parser.parse("function out = dosomething(in)\n% Docstring\n")
+        >>> parsed
+        {'main':{'key_type':'function', 'doc':' Docstring\n'}, 'sub':[]}
         """
-        return (e for a in n for e in (MatlabNodeVisitor.flatten(*a)
-                                       if isinstance(a, (tuple, list))
-                                       else (a,)))
 
-    def visit_mfile(self, node, (s1, root_comment, sp2, docobj_or_code)):
+        p = self._grammar[expr_name].parse(mfile_string)
+        return NodeVisitor.visit(self, p)
+
+    def visit_mfile(self, node, (s1, root_comment, sp2, code_sections)):
+        """Visits an mfile parsimonious node and extracts a dict from the node
+        and its children.
+
+        """
         root_comment = root_comment[0] if root_comment else ''
         docobjects = []
 
-        for i, (docobj, codelines) in enumerate(docobj_or_code):
-            calls = list(set(MatlabNodeVisitor.flatten(codelines)))
-            calls.sort()
-            calls = tuple(calls)
-            if i == 0 and not docobj:
-                docobjects = [dict(key_type='script', calls=calls)]
-                break
+        # loop over
+        is_maybe_script = True
+        for docobj, codelines in code_sections:
+            calls = MatlabDocParser.get_sorted_unique_tuple(
+                MatlabDocParser.flatten(codelines))
+            if is_maybe_script:
+                # In case no function and no class were found at the beginning
+                # of the file it means that we are dealing with a script file.
+                # In either case, we know then know if this is a script or not
+                is_script_maybe = False
+                if not docobj:
+                    docobjects = [dict(key_type='script', calls=calls, doc='')]
+                    break
             docobj = docobj[0]
             docobj['calls'] = calls
             docobjects.append(docobj)
+
         # add root comment to doc object
         docobjects[0]['doc'] = root_comment + docobjects[0]['doc']
         # split into main and subfunctions
@@ -115,143 +173,31 @@ class MatlabNodeVisitor(NodeVisitor):
         # print "{0}: {1}".format(node.expr_name, visited_children)
         return visited_children
 
+    @staticmethod
+    def get_sorted_unique_tuple(list_like):
+        """Return a sorted unique tuple from the list like input
 
-class MatlabdocParser2Tests(unittest.TestCase):
-    """Tests for parsimonious matlab doc grammar.
+        :arg list_like: iterable to be converted
+        """
+        list_like = list(set(list_like))
+        list_like.sort()
+        list_like = tuple(list_like)
+        return list_like
 
-    Try to cover most of the syntax possibilities.
+    @staticmethod
+    def flatten(*n):
+        """Creates a generator that flattens iterables.
 
-    """
+        :arg *n: comma sperated list of iterables that should be joined
+        together into a flattened iterable
 
-    def __init__(self, methodName='runTest'):
-        unittest.TestCase.__init__(self, methodName)
-        self.logger = logging.getLogger(__name__ + '.ParserTests')
-        self.logger.setLevel(logging.DEBUG)
+        """
+        return (e for a in n for e in (MatlabDocParser.flatten(*a)
+                                       if isinstance(a, (tuple, list)) else (a,)))
 
-        self.grammar = Grammar(open("matlabdoc_parser2.grammar").read())
-        self.node_viewer = MatlabNodeVisitor()
-
-    def parse(self, expr_name, test_str):
-        p = self.grammar[expr_name].parse(test_str)
-        return self.node_viewer.visit(p)
-
-    def setUp(self):
-        pass
-
-    def test_mfile(self):
-        s = ("classdef A < R\n"
-             "function a = asd(in1, in2)\n"
-             "% asdlhas \n % dddd\n asdasd \n"
-             "    function f2()\n"
-             "   funccall(a, fcall2(a, b))\n"
-             "    last line funccall(3)asddaa\n")
-        actual = self.parse('mfile', s)
-        expected = {
-            'main':
-            {
-                'key_type': 'class',
-                'doc': '',
-                'name': 'A',
-                'superclasses': ('R',),
-                'calls': ()
-            },
-            'sub':
-            [{
-                'inargs': ('in1', 'in2'),
-                'doc': ' asdlhas \n dddd\n',
-                'outargs': ('a',),
-                'name': 'asd',
-                'key_type': 'function',
-                'calls': ()
-            },
-             {
-                 'inargs': (),
-                 'doc': '',
-                 'outargs': (),
-                 'name': 'f2',
-                 'key_type': 'function',
-                 'calls': ('fcall2', 'funccall')
-             }]}
-
-        self.assertDictEqual(actual, expected)
-
-    def test_definition_line_class(self):
-        actual = self.parse('definition_line', '   classdef A  \n')
-        expected = dict(key_type='class', name='A', superclasses=())
-        self.assertDictEqual(actual, expected)
-
-    def test_definition_line_function(self):
-        actual = self.parse('definition_line', '   function a  \n')
-        expected = dict(key_type='function', name='a', outargs=(), inargs=())
-        self.assertDictEqual(actual, expected)
-
-    def test_classdef(self):
-        actual = self.parse('classdef', 'classdef A')
-        expected = dict(key_type='class', name='A', superclasses=())
-        self.assertDictEqual(actual, expected)
-
-    def test_inherit(self):
-        actual = self.parse('inherit', '< S1 & ...\n  S2')
-        expected = ('S1', 'S2')
-        self.assertTupleEqual(actual, expected)
-
-    def test_functiondef(self):
-        actual = self.parse('functiondef', 'function a()')
-        expected = dict(key_type='function', name='a', outargs=(), inargs=())
-        self.assertDictEqual(actual, expected)
-
-    def test_outargs_single(self):
-        actual = self.parse('outargs', 'asd =')
-        expected = ('asd',)
-        self.assertTupleEqual(actual, expected)
-
-    def test_outargs_multiple(self):
-        actual = self.parse('outargs', '[ ...\na, f,... \n    b]=')
-        expected = ('a', 'f', 'b')
-        self.assertTupleEqual(actual, expected)
-
-    def test_inargs_none(self):
-        actual = self.parse('inargs', '()')
-        expected = ()
-        self.assertTupleEqual(actual, expected)
-
-    def test_inargs_single(self):
-        actual = self.parse('inargs', '(...\n asd)')
-        expected = ('asd',)
-        self.assertTupleEqual(actual, expected)
-
-    def test_inargs_multiple(self):
-        actual = self.parse('inargs', '( ...\n a, f, b)')
-        expected = ('a', 'f', 'b')
-        self.assertTupleEqual(actual, expected)
-
-    def test_commentblock(self):
-        actual = self.parse(
-            'commentblock',
-            '% line nr.1 \n  % line2 test % comment in comment\n%3rd\n')
-        expected = ' line nr.1 \n line2 test % comment in comment\n3rd\n'
-        self.assertEqual(actual, expected)
-
-    def test_comment(self):
-        actual = self.parse('comment', '% asdllljasd\n')
-        expected = ' asdllljasd\n'
-        self.assertEqual(actual, expected)
-
-    def test_codeline(self):
-        # return
-        actual = self.parse('codeline', 'asd aasd funcname1  ( func2() )\n')
-        expected = ['funcname1', 'func2']
-        self.assertEqual(actual, expected)
-
-    def test_call(self):
-        actual = self.parse('call', 'funcname1  (')
-        expected = 'funcname1'
-        self.assertEqual(actual, expected)
 
 if __name__ == '__main__':
-    # f = "/home/dek/Documents/Code/matlabdoc/matlabdoc/tests/matlab_test_dir/realfiledir/SuperelementBuilder.m"
-    # G = Grammar(open("matlab.grammar").read())
-    # nv = MatlabNodeVisitor()
-
-    unittest.main()
-    # unittest.main('matlabdoc_parser2', 'MatlabdocParser2Tests.test_call', exit=True, catchbreak=True)
+    print "Running tests for " + __file__
+    import unittest
+    import tests.test_matlabdoc_parser
+    unittest.main(tests.test_matlabdoc_parser)
